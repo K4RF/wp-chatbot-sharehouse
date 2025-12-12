@@ -1,14 +1,14 @@
 <?php
 /**
  * Plugin Name: 공간나인 AI 매니저 (GitHub Edition)
- * Description: API 키를 분리하여 깃허브 관리에 최적화된 버전 (AI 스마트 뮤트 기능 포함)
- * Version: 7.6
+ * Description: API 키를 분리하여 깃허브 관리에 최적화된 버전 (타임스탬프 기능 추가)
+ * Version: 7.7
  * Author: GongganNine
  */
 
 if (!defined('ABSPATH')) exit;
 
-// ★ [보안] 설정 파일 불러오기 (없으면 에러 처리)
+// 설정 파일 불러오기
 $config_file = plugin_dir_path(__FILE__) . 'gnbot-config.php';
 if (file_exists($config_file)) {
     require_once $config_file;
@@ -36,7 +36,6 @@ class Gonggan_Chatbot_Git {
         add_shortcode('gn_chatbot_page', [$this, 'render_shortcode']);
     }
 
-    // 설정 파일이 없을 때 경고 메시지 표시
     public function check_config() {
         if (!defined('GNBOT_OPENAI_KEY')) {
             return "⚠️ [설정 오류] 'gnbot-config.php' 파일이 없거나 API 키가 설정되지 않았습니다.";
@@ -62,8 +61,8 @@ class Gonggan_Chatbot_Git {
 
     public function enqueue_assets() { 
         wp_enqueue_script('jquery');
-        wp_enqueue_style('gnbot-style', plugin_dir_url(__FILE__) . 'style.css', [], '1.0');
-        wp_enqueue_script('gnbot-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], '1.0', true);
+        wp_enqueue_style('gnbot-style', plugin_dir_url(__FILE__) . 'style.css', [], '1.1'); // 버전 업
+        wp_enqueue_script('gnbot-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], '1.1', true);
         wp_localize_script('gnbot-script', 'gnBotSettings', [
             'ajax_url' => admin_url('admin-ajax.php')
         ]);
@@ -106,14 +105,12 @@ class Gonggan_Chatbot_Git {
                 } elseif (isset($p['properties']['입주현황']['rollup']['array'][0]['select']['name'])) {
                     $st = $p['properties']['입주현황']['rollup']['array'][0]['select']['name'];
                 }
-
                 $dt = '';
                 if (isset($p['properties']['계약기간']['date']['end'])) {
                     $dt = $p['properties']['계약기간']['date']['end'];
                 } elseif (isset($p['properties']['계약기간']['rollup']['array'][0]['date']['end'])) {
                     $dt = $p['properties']['계약기간']['rollup']['array'][0]['date']['end'];
                 }
-
                 if($br && $rm) $lines[] = "- [$br] $rm호 : $st (계약만료: $dt)";
             }
         }
@@ -121,7 +118,6 @@ class Gonggan_Chatbot_Git {
     }
 
     public function ajax_chat_submit() {
-        // 설정 파일 체크
         $config_err = $this->check_config();
         if ($config_err) { wp_send_json_error($config_err); return; }
 
@@ -129,16 +125,13 @@ class Gonggan_Chatbot_Git {
         $name = sanitize_text_field($_POST['name'] ?? '');
         $phone = sanitize_text_field($_POST['phone'] ?? '');
 
-        // 1. 고객 메시지 저장
         $this->save_message($phone, $name, $msg, '고객');
 
-        // ★ 관리자가 개입(Mute)했는지 확인
         if (get_option('gnbot_mute_' . $phone)) {
             wp_send_json_success('관리자 상담 모드입니다. (AI 답변 없음)');
             return;
         }
         
-        // 2. AI 답변 생성
         $room_info = $this->fetch_room_status_safe();
 
         $res = wp_remote_post('https://api.openai.com/v1/chat/completions', [
@@ -174,7 +167,8 @@ class Gonggan_Chatbot_Git {
     public function ajax_get_history() {
         global $wpdb;
         $phone = sanitize_text_field($_POST['phone'] ?? '');
-        $results = $wpdb->get_results($wpdb->prepare("SELECT message as msg, sender FROM $this->table_name WHERE phone = %s ORDER BY created_at ASC", $phone), ARRAY_A);
+        // ★ [수정] created_at 추가
+        $results = $wpdb->get_results($wpdb->prepare("SELECT message as msg, sender, created_at FROM $this->table_name WHERE phone = %s ORDER BY created_at ASC", $phone), ARRAY_A);
         wp_send_json_success($results);
     }
     
@@ -187,16 +181,13 @@ class Gonggan_Chatbot_Git {
     public function ajax_send_admin() {
         $phone = sanitize_text_field($_POST['phone']);
         $this->save_message($phone, $_POST['name'], $_POST['message'], '관리자');
-        
-        // ★ 관리자 전송 시 AI 침묵 설정
         update_option('gnbot_mute_' . $phone, true);
-        
         wp_send_json_success();
     }
 
     public function ajax_reset_ai() {
         $phone = sanitize_text_field($_POST['phone']);
-        delete_option('gnbot_mute_' . $phone); // 침묵 해제
+        delete_option('gnbot_mute_' . $phone);
         $this->save_message($phone, '시스템', 'AI 상담이 다시 활성화되었습니다.', '시스템');
         wp_send_json_success();
     }
@@ -206,7 +197,7 @@ class Gonggan_Chatbot_Git {
     }
 
     public function admin_page_html() {
-        // 관리자 페이지 UI (기존과 동일)
+        // 관리자 페이지는 변경 없음 (기존 코드 유지)
         ?>
         <div class="wrap" style="display:flex; gap:20px; height:80vh;">
             <div style="width:250px; background:#fff; border:1px solid #ddd; padding:10px; overflow-y:auto;">

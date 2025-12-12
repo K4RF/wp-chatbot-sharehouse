@@ -35,6 +35,25 @@ function logoutChat() {
     }
 }
 
+// ★ [추가] 시간을 '오후 2:30' 형식으로 만드는 함수
+function getPrettyTime(dateStr) {
+    let date = new Date(); // 기본값: 현재 시간
+    if(dateStr && dateStr !== '0000-00-00 00:00:00') {
+        // 서버 시간(YYYY-MM-DD HH:MM:SS)을 파싱
+        let t = dateStr.split(/[- :]/);
+        date = new Date(t[0], t[1]-1, t[2], t[3], t[4], t[5]);
+    }
+
+    let h = date.getHours();
+    let m = date.getMinutes();
+    let ampm = h >= 12 ? '오후' : '오전';
+    h = h % 12;
+    h = h ? h : 12; // 0시는 12시로 표시
+    m = m < 10 ? '0'+m : m;
+    
+    return `${ampm} ${h}:${m}`;
+}
+
 function sendM() {
     if (isErrorHappened) return alert('오류가 발생했습니다. 페이지를 새로고침해주세요.');
 
@@ -42,20 +61,19 @@ function sendM() {
     let m = i.value.trim();
     if (!m) return;
     i.disabled = true;
-    appendMsg(m, '고객');
+    
+    // 내 메시지는 즉시 표시 (현재 시간 사용)
+    appendMsg(m, '고객', null); 
     i.value = '';
 
     let b = document.getElementById('cb');
     let l = document.createElement('div');
     l.id = 'ai-loader';
     l.innerText = 'AI가 답변을 작성 중입니다...';
-    l.style.color = '#888';
-    l.style.fontSize = '12px';
-    l.style.marginLeft = '5px';
+    l.style.color = '#555'; l.style.fontSize = '12px'; l.style.margin = '10px'; l.style.textAlign='center';
     b.appendChild(l);
     b.scrollTop = b.scrollHeight;
 
-    // ★ [중요] gnBotSettings.ajax_url은 PHP 파일에서 전달받은 값입니다.
     jQuery.post(gnBotSettings.ajax_url, {
         action: 'gnbot_chat_submit',
         message: m,
@@ -67,7 +85,9 @@ function sendM() {
 
         if (!r.success) {
             isErrorHappened = true;
-            appendMsg("🚫 " + r.data, '시스템');
+            // 시스템 에러 메시지는 시간 표시 안 함
+            let b = document.getElementById('cb');
+            b.innerHTML += `<div style="text-align:center; color:red; font-size:12px; margin:10px;">🚫 ${r.data}</div>`;
         } else {
             pollMessages();
         }
@@ -76,10 +96,9 @@ function sendM() {
     }).fail(function(xhr) {
         let loader = document.getElementById('ai-loader');
         if (loader) loader.remove();
-
         isErrorHappened = true;
-        appendMsg("🚫 서버 통신 오류 (관리자에게 문의하세요)", '시스템');
-        console.error("Server Error:", xhr);
+        let b = document.getElementById('cb');
+        b.innerHTML += `<div style="text-align:center; color:red; font-size:12px; margin:10px;">🚫 서버 통신 오류</div>`;
         i.disabled = false;
     });
 }
@@ -96,25 +115,47 @@ function pollMessages() {
             if (document.getElementById('ai-loader')) return;
 
             b.innerHTML = '';
-            appendMsg("안녕하세요! 공간나인 매니저입니다.<br>무엇을 도와드릴까요?", 'bot');
+            // 웰컴 메시지 (시간 없음)
+            let welcome = document.createElement('div');
+            welcome.className = 'msg-row bot-row';
+            welcome.innerHTML = `<div class="bubble bot">안녕하세요! 공간나인 매니저입니다.<br>무엇을 도와드릴까요?</div>`;
+            b.appendChild(welcome);
+
             r.data.forEach(function(msg) {
-                appendMsg(msg.msg, msg.sender);
+                appendMsg(msg.msg, msg.sender, msg.created_at);
             });
             b.scrollTop = b.scrollHeight;
         }
     });
 }
 
-function appendMsg(msg, sender) {
+// ★ [수정] 메시지 추가 함수 (시간 레이아웃 적용)
+function appendMsg(msg, sender, timeStr) {
     let b = document.getElementById('cb');
-    let cls = sender === '고객' ? 'user' : (sender === '관리자' ? 'admin' : 'bot');
+    
+    // 시스템 메시지 처리
     if (sender === '시스템') {
         b.innerHTML += `<div style="text-align:center; color:red; font-size:12px; margin:10px;">${msg}</div>`;
-    } else {
-        let div = document.createElement('div');
-        div.className = 'bubble ' + cls;
-        div.innerHTML = msg.replace(/\n/g, '<br>');
-        div.style.marginBottom = '10px';
-        b.appendChild(div);
+        return;
     }
+
+    let prettyTime = getPrettyTime(timeStr); // 시간 포맷팅
+    let row = document.createElement('div');
+    let cls = sender === '고객' ? 'user' : (sender === '관리자' ? 'admin' : 'bot');
+    
+    // 행 클래스 설정 (user-row는 오른쪽 정렬, bot-row는 왼쪽 정렬)
+    row.className = 'msg-row ' + (sender === '고객' ? 'user-row' : 'bot-row');
+
+    let bubbleHtml = `<div class="bubble ${cls}">${msg.replace(/\n/g, '<br>')}</div>`;
+    let timeHtml = `<span class="msg-time">${prettyTime}</span>`;
+
+    // 고객이면: [시간] [말풍선] 순서 (Flex-end라 오른쪽 끝에 붙음)
+    if (sender === '고객') {
+        row.innerHTML = timeHtml + bubbleHtml;
+    } else {
+        // AI/관리자면: [말풍선] [시간] 순서
+        row.innerHTML = bubbleHtml + timeHtml;
+    }
+
+    b.appendChild(row);
 }
