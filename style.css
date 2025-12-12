@@ -1,0 +1,20 @@
+.gn-phone-container { max-width: 380px; width: 100%; height: 80vh; max-height: 800px; margin: 0 auto; background: #fff; border: 1px solid #e1e1e1; border-radius: 25px; box-shadow: 0 20px 50px rgba(0,0,0,0.15); overflow: hidden; display: flex; flex-direction: column; font-family: 'Noto Sans KR', sans-serif; }
+#gn-login { padding: 30px; text-align: center; height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 15px; }
+.gn-title { font-size: 20px; font-weight: 800; color: #333; margin-bottom: 5px; }
+.gn-desc { color: #666; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }
+.gn-input { width: 100%; padding: 14px; border: 1px solid #ddd; border-radius: 12px; font-size: 15px; outline: none; box-sizing: border-box; background: #fafafa; }
+.gn-input:focus { border-color: #333; background: #fff; }
+.gn-btn-primary { width: 100%; padding: 15px; background: #222; color: #fff; font-size: 15px; font-weight: bold; border: none; border-radius: 12px; cursor: pointer; margin-top: 10px; }
+#gn-chat { display: none; flex-direction: column; height: 100%; }
+.gn-head { padding: 18px; background: #222; color: #fff; font-weight: bold; font-size: 16px; display:flex; justify-content:space-between; align-items:center; }
+.gn-logout { font-size: 12px; color: #ccc; cursor: pointer; text-decoration: underline; }
+.gn-body { flex: 1; padding: 20px; background: #f4f6f8; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.gn-foot { padding: 12px 15px; background: #fff; border-top: 1px solid #eee; display: flex; gap: 10px; align-items: center; }
+.gn-msg-input { flex: 1; padding: 12px 15px; border: 1px solid #ddd; border-radius: 25px; outline: none; font-size: 15px; background: #f9f9f9; height: 50px; box-sizing: border-box; }
+.gn-msg-input:disabled { background: #eee; cursor: not-allowed; }
+.gn-send-icon { background: #222; color: #fff; width: 50px; height: 50px; flex: 0 0 50px; border-radius: 50%; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+.gn-send-icon:disabled { background: #bbb; cursor: not-allowed; }
+.bubble { max-width: 80%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; word-break: break-all; }
+.bot { align-self: flex-start; background: #fff; border: 1px solid #e5e5e5; color: #333; border-bottom-left-radius: 2px; }
+.user { align-self: flex-end; background: #333; color: #fff; border-bottom-right-radius: 2px; }
+.admin { align-self: flex-start; background: #e6f7ff; border: 1px solid #91d5ff; color: #0050b3; border-bottom-left-radius: 2px; }
