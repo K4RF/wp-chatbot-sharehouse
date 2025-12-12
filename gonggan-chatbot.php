@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: 공간나인 AI 매니저 (GitHub Edition)
- * Description: API 키를 분리하여 깃허브 관리에 최적화된 버전 (타임스탬프 기능 추가)
- * Version: 7.7
+ * Plugin Name: 공간나인 AI 매니저 (V7.9 Admin Time)
+ * Description: 관리자 페이지에서도 대화 시간을 확인할 수 있도록 개선된 버전
+ * Version: 7.9
  * Author: GongganNine
  */
 
@@ -61,8 +61,9 @@ class Gonggan_Chatbot_Git {
 
     public function enqueue_assets() { 
         wp_enqueue_script('jquery');
-        wp_enqueue_style('gnbot-style', plugin_dir_url(__FILE__) . 'style.css', [], '1.1'); // 버전 업
-        wp_enqueue_script('gnbot-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], '1.1', true);
+        // V7.8 버전의 스타일을 그대로 사용
+        wp_enqueue_style('gnbot-style', plugin_dir_url(__FILE__) . 'style.css', [], '1.2'); 
+        wp_enqueue_script('gnbot-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], '1.2', true);
         wp_localize_script('gnbot-script', 'gnBotSettings', [
             'ajax_url' => admin_url('admin-ajax.php')
         ]);
@@ -167,7 +168,6 @@ class Gonggan_Chatbot_Git {
     public function ajax_get_history() {
         global $wpdb;
         $phone = sanitize_text_field($_POST['phone'] ?? '');
-        // ★ [수정] created_at 추가
         $results = $wpdb->get_results($wpdb->prepare("SELECT message as msg, sender, created_at FROM $this->table_name WHERE phone = %s ORDER BY created_at ASC", $phone), ARRAY_A);
         wp_send_json_success($results);
     }
@@ -196,8 +196,8 @@ class Gonggan_Chatbot_Git {
         add_menu_page('AI 상담', 'AI 상담', 'manage_options', 'gnbot-admin', [$this, 'admin_page_html'], 'dashicons-groups', 6);
     }
 
+    // ★ [수정됨] 관리자 페이지 HTML 및 JS
     public function admin_page_html() {
-        // 관리자 페이지는 변경 없음 (기존 코드 유지)
         ?>
         <div class="wrap" style="display:flex; gap:20px; height:80vh;">
             <div style="width:250px; background:#fff; border:1px solid #ddd; padding:10px; overflow-y:auto;">
@@ -210,7 +210,7 @@ class Gonggan_Chatbot_Git {
                     <span id="gn-chat-title">선택 대기중</span>
                     <button id="btn-reset-ai" class="button button-small" onclick="resetAI()" style="display:none;">🤖 AI 다시 켜기</button>
                 </div>
-                <div id="gn-admin-chat-box" style="flex:1; padding:20px; overflow-y:auto; background:#f9f9f9;"></div>
+                <div id="gn-admin-chat-box" style="flex:1; padding:20px; overflow-y:auto; background:#f4f6f8;"></div>
                 <div style="padding:15px; border-top:1px solid #ddd; background:#fff; display:flex;">
                     <input type="text" id="gn-admin-input" style="flex:1; padding:8px;" placeholder="답변 입력..." onkeypress="if(event.keyCode==13) sendAdminMsg()">
                     <button class="button button-primary" onclick="sendAdminMsg()" style="margin-left:10px;">전송</button>
@@ -219,6 +219,24 @@ class Gonggan_Chatbot_Git {
         </div>
         <script>
             var currentPhone='', currentName='';
+            
+            // 시간 포맷팅 함수 (관리자용: 월/일 포함)
+            function getAdminTime(dateStr) {
+                if(!dateStr || dateStr === '0000-00-00 00:00:00') return '';
+                let t = dateStr.split(/[- :]/);
+                let date = new Date(t[0], t[1]-1, t[2], t[3], t[4], t[5]);
+                
+                let mon = date.getMonth() + 1;
+                let day = date.getDate();
+                let h = date.getHours();
+                let m = date.getMinutes();
+                let ampm = h >= 12 ? '오후' : '오전';
+                h = h % 12; h = h ? h : 12;
+                m = m < 10 ? '0'+m : m;
+                
+                return `${mon}/${day} ${ampm} ${h}:${m}`;
+            }
+
             function loadUserList() {
                 jQuery.post(ajaxurl, {action: 'gnbot_admin_list'}, function(res) {
                     if(res.success) {
@@ -244,13 +262,37 @@ class Gonggan_Chatbot_Git {
                         var box = document.getElementById('gn-admin-chat-box');
                         box.innerHTML = '';
                         res.data.forEach(function(msg) {
-                            var align = msg.sender === '관리자' ? 'right' : 'left';
-                            var bg = msg.sender === '관리자' ? '#e6f7ff' : (msg.sender === 'AI' ? '#eee' : '#fff');
+                            var isMe = (msg.sender === '관리자'); // 내가 보낸 것
+                            
+                            // 시스템 메시지 처리
                             if(msg.sender === '시스템') {
-                                box.innerHTML += `<div style="text-align:center; margin:10px; color:#888; font-size:12px;">- ${msg.msg} -</div>`;
-                            } else {
-                                box.innerHTML += `<div style="text-align:${align}; margin-bottom:10px;"><div style="display:inline-block; padding:8px 12px; background:${bg}; border-radius:10px; border:1px solid #ddd; max-width:70%; text-align:left;">${msg.msg}</div></div>`;
+                                box.innerHTML += `<div style="text-align:center; margin:10px; color:#999; font-size:12px;">- ${msg.msg} -</div>`;
+                                return;
                             }
+
+                            // 말풍선 레이아웃 (Flexbox)
+                            var rowStyle = `display:flex; align-items:flex-end; margin-bottom:10px; justify-content:${isMe ? 'flex-end' : 'flex-start'};`;
+                            
+                            // 말풍선 색상 및 스타일
+                            var bubbleStyle = isMe 
+                                ? "background:#e6f7ff; border:1px solid #91d5ff; color:#0050b3; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"
+                                : (msg.sender === 'AI' 
+                                    ? "background:#fff; border:1px solid #ddd; color:#333; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"
+                                    : "background:#222; color:#fff; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"); // 고객
+
+                            var timeHtml = `<span style="font-size:10px; color:#999; margin:0 5px; padding-bottom:2px; white-space:nowrap;">${getAdminTime(msg.created_at)}</span>`;
+                            var bubbleHtml = `<div style="${bubbleStyle}">${msg.msg.replace(/\n/g, '<br>')}</div>`;
+
+                            // HTML 조립
+                            var html = `<div style="${rowStyle}">`;
+                            if(isMe) {
+                                html += timeHtml + bubbleHtml; // [시간] [말풍선]
+                            } else {
+                                html += bubbleHtml + timeHtml; // [말풍선] [시간]
+                            }
+                            html += `</div>`;
+
+                            box.innerHTML += html;
                         });
                         box.scrollTop = box.scrollHeight;
                     }
