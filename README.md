@@ -19,6 +19,18 @@ WordPress용 쉐어하우스 입주 문의 AI 챗봇 플러그인입니다.
     -   `wp-chatbot` 폴더 안에 `gnbot-config.php` 파일을 생성하고 아래 내용을 복사하여 붙여넣습니다.
     -   `GNBOT_OPENAI_KEY`, `GNBOT_NOTION_KEY`, `GNBOT_DATABASE_ID`에 발급받은 실제 키 값을 입력합니다.
 
+    ```php
+    <?php
+    // gnbot-config.php
+
+    // 1. OpenAI API Key
+    define('GNBOT_OPENAI_KEY', 'YOUR_OPENAI_API_KEY');
+
+    // 2. Notion API Key & Database ID
+    define('GNBOT_NOTION_KEY', 'YOUR_NOTION_API_KEY');
+    define('GNBOT_DATABASE_ID', 'YOUR_NOTION_DATABASE_ID');
+    ```
+
 3.  **플러그인 활성화**:
     -   WordPress 관리자 페이지의 '플러그인' 메뉴로 이동하여 '공간나인 AI 매니저'를 찾아 활성화합니다.
 
@@ -33,7 +45,7 @@ WordPress용 쉐어하우스 입주 문의 AI 챗봇 플러그인입니다.
 
 3.  페이지를 저장하고 확인하면 해당 위치에 챗봇이 나타납니다.
 
-## 🌐 사이트
+## 🌐 관련 사이트
 
 -   **쉐어하우스 사이트**: [share.gonggan9.com](http://share.gonggan9.com)
 
