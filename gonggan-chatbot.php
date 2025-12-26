@@ -1,16 +1,14 @@
 <?php
 /**
- * Plugin Name: 공간나인 AI 매니저 (V7.9 Admin Time)
- * Description: 관리자 페이지에서도 대화 시간을 확인할 수 있도록 개선된 버전
- * Version: 7.9
+ * Plugin Name: 공간나인 AI 매니저 (OpenAI + Privacy Check)
+ * Description: 개인정보 수집 동의 체크박스가 추가된 OpenAI 버전
+ * Version: 8.3
  * Author: GongganNine
  */
 
 if (!defined('ABSPATH')) exit;
 
-// ==============================================================================
-// 1. 설정 파일 로드 (보안을 위해 API 키 분리)
-// ==============================================================================
+// 설정 파일 불러오기
 $config_file = plugin_dir_path(__FILE__) . 'gnbot-config.php';
 if (file_exists($config_file)) {
     require_once $config_file;
@@ -20,34 +18,24 @@ class Gonggan_Chatbot_Git {
 
     private $table_name;
 
-    // ==============================================================================
-    // 2. 생성자: 워드프레스 훅 및 액션 등록
-    // ==============================================================================
     public function __construct() {
         global $wpdb;
         $this->table_name = $wpdb->prefix . 'gn_chat_logs'; 
         
-        // 플러그인 활성화 시 DB 테이블 생성
         register_activation_hook(__FILE__, [$this, 'create_table']); 
         
-        // 스크립트(JS, CSS) 로드
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
-        
-        // 관리자 메뉴 및 AJAX 동작 등록
         add_action('admin_menu', [$this, 'add_admin_menu']);
-        add_action('wp_ajax_gnbot_chat_submit', [$this, 'ajax_chat_submit']);       // 고객 메시지 전송
+        add_action('wp_ajax_gnbot_chat_submit', [$this, 'ajax_chat_submit']);
         add_action('wp_ajax_nopriv_gnbot_chat_submit', [$this, 'ajax_chat_submit']);
-        add_action('wp_ajax_gnbot_get_history', [$this, 'ajax_get_history']);       // 대화 기록 조회
+        add_action('wp_ajax_gnbot_get_history', [$this, 'ajax_get_history']);
         add_action('wp_ajax_nopriv_gnbot_get_history', [$this, 'ajax_get_history']);
-        add_action('wp_ajax_gnbot_admin_list', [$this, 'ajax_admin_list']);         // (관리자) 상담 목록 조회
-        add_action('wp_ajax_gnbot_send_admin', [$this, 'ajax_send_admin']);         // (관리자) 답변 전송
-        add_action('wp_ajax_gnbot_reset_ai', [$this, 'ajax_reset_ai']);             // (관리자) AI 재활성화
-        
-        // 사용자 화면 숏코드 등록 [gn_chatbot_page]
+        add_action('wp_ajax_gnbot_admin_list', [$this, 'ajax_admin_list']);
+        add_action('wp_ajax_gnbot_send_admin', [$this, 'ajax_send_admin']);
+        add_action('wp_ajax_gnbot_reset_ai', [$this, 'ajax_reset_ai']);
         add_shortcode('gn_chatbot_page', [$this, 'render_shortcode']);
     }
 
-    // 설정 파일(gnbot-config.php) 존재 여부 및 API 키 확인
     public function check_config() {
         if (!defined('GNBOT_OPENAI_KEY')) {
             return "⚠️ [설정 오류] 'gnbot-config.php' 파일이 없거나 API 키가 설정되지 않았습니다.";
@@ -55,7 +43,6 @@ class Gonggan_Chatbot_Git {
         return null;
     }
 
-    // DB 테이블 생성 (플러그인 활성화 시 1회 실행)
     public function create_table() {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
@@ -72,19 +59,15 @@ class Gonggan_Chatbot_Git {
         dbDelta($sql);
     }
 
-    // CSS 및 JS 파일 로드 (jQuery 의존성 설정)
     public function enqueue_assets() { 
         wp_enqueue_script('jquery');
         wp_enqueue_style('gnbot-style', plugin_dir_url(__FILE__) . 'style.css', [], '1.2'); 
         wp_enqueue_script('gnbot-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], '1.2', true);
-        
-        // PHP 데이터를 JS로 전달 (AJAX URL 등)
         wp_localize_script('gnbot-script', 'gnBotSettings', [
             'ajax_url' => admin_url('admin-ajax.php')
         ]);
     }
 
-    // 메시지 DB 저장 헬퍼 함수
     private function save_message($phone, $name, $msg, $sender) {
         global $wpdb;
         if ($wpdb->get_var("SHOW TABLES LIKE '$this->table_name'") != $this->table_name) {
@@ -93,7 +76,6 @@ class Gonggan_Chatbot_Git {
         $wpdb->insert($this->table_name, ['phone' => $phone, 'name' => $name, 'message' => $msg, 'sender' => $sender, 'created_at' => current_time('mysql')]);
     }
 
-    // [RAG 핵심] 노션 API를 호출하여 실시간 공실 정보를 가져오는 함수
     private function fetch_room_status_safe() {
         if (!defined('GNBOT_DATABASE_ID') || !GNBOT_DATABASE_ID) return "(DB설정안됨)";
 
@@ -105,7 +87,6 @@ class Gonggan_Chatbot_Git {
         
         $res = wp_remote_request($url, $args);
         
-        // 노션 연결 실패 시 예외 처리
         if (is_wp_error($res) || wp_remote_retrieve_response_code($res) != 200) {
             return "(노션 연결 실패 - AI 답변만 진행합니다)"; 
         }
@@ -114,13 +95,11 @@ class Gonggan_Chatbot_Git {
         $data = json_decode($body, true);
         $lines = [];
 
-        // 노션 데이터 파싱 (지점명, 방번호, 입주현황, 계약만료일)
         if (is_array($data) && !empty($data['results'])) {
             foreach ($data['results'] as $p) {
                 $br = $p['properties']['지점명']['select']['name'] ?? '';
                 $rm = $p['properties']['방번호']['title'][0]['plain_text'] ?? '';
                 $st = '-';
-                // 롤업 속성 처리 포함
                 if (isset($p['properties']['입주현황']['select']['name'])) {
                     $st = $p['properties']['입주현황']['select']['name'];
                 } elseif (isset($p['properties']['입주현황']['rollup']['array'][0]['select']['name'])) {
@@ -138,9 +117,6 @@ class Gonggan_Chatbot_Git {
         return empty($lines) ? "(공실 정보 없음)" : implode("\n", $lines);
     }
 
-    // ==============================================================================
-    // 3. 메인 로직: 고객 메시지 처리 및 AI 응답 (AJAX)
-    // ==============================================================================
     public function ajax_chat_submit() {
         $config_err = $this->check_config();
         if ($config_err) { wp_send_json_error($config_err); return; }
@@ -149,19 +125,15 @@ class Gonggan_Chatbot_Git {
         $name = sanitize_text_field($_POST['name'] ?? '');
         $phone = sanitize_text_field($_POST['phone'] ?? '');
 
-        // 1. 고객 메시지 저장
         $this->save_message($phone, $name, $msg, '고객');
 
-        // 2. 관리자 개입 여부 확인 (Mute 기능)
         if (get_option('gnbot_mute_' . $phone)) {
             wp_send_json_success('관리자 상담 모드입니다. (AI 답변 없음)');
             return;
         }
         
-        // 3. 노션 데이터(RAG) 조회
         $room_info = $this->fetch_room_status_safe();
 
-        // 4. OpenAI API 호출 (gpt-4o-mini)
         $res = wp_remote_post('https://api.openai.com/v1/chat/completions', [
             'headers' => ['Authorization' => 'Bearer ' . GNBOT_OPENAI_KEY, 'Content-Type' => 'application/json'],
             'body' => json_encode([
@@ -174,7 +146,6 @@ class Gonggan_Chatbot_Git {
             'timeout' => 20
         ]);
 
-        // 5. 응답 처리 및 저장
         if (is_wp_error($res)) {
             $err = $res->get_error_message();
             $this->save_message($phone, $name, "연결 오류: $err", '시스템');
@@ -193,7 +164,6 @@ class Gonggan_Chatbot_Git {
         }
     }
 
-    // 대화 내역 조회 (created_at 시간 포함)
     public function ajax_get_history() {
         global $wpdb;
         $phone = sanitize_text_field($_POST['phone'] ?? '');
@@ -201,37 +171,30 @@ class Gonggan_Chatbot_Git {
         wp_send_json_success($results);
     }
     
-    // (관리자) 상담 목록 리스트 조회
     public function ajax_admin_list() {
         global $wpdb;
         $results = $wpdb->get_results("SELECT DISTINCT phone, name FROM $this->table_name ORDER BY created_at DESC LIMIT 50", ARRAY_A);
         wp_send_json_success($results);
     }
 
-    // (관리자) 메시지 전송 및 AI 답변 중단(Mute) 설정
     public function ajax_send_admin() {
         $phone = sanitize_text_field($_POST['phone']);
         $this->save_message($phone, $_POST['name'], $_POST['message'], '관리자');
-        update_option('gnbot_mute_' . $phone, true); // AI 답변 비활성화
+        update_option('gnbot_mute_' . $phone, true);
         wp_send_json_success();
     }
 
-    // (관리자) AI 답변 재활성화
     public function ajax_reset_ai() {
         $phone = sanitize_text_field($_POST['phone']);
-        delete_option('gnbot_mute_' . $phone); // Mute 해제
+        delete_option('gnbot_mute_' . $phone);
         $this->save_message($phone, '시스템', 'AI 상담이 다시 활성화되었습니다.', '시스템');
         wp_send_json_success();
     }
 
-    // 관리자 메뉴 등록
     public function add_admin_menu() {
         add_menu_page('AI 상담', 'AI 상담', 'manage_options', 'gnbot-admin', [$this, 'admin_page_html'], 'dashicons-groups', 6);
     }
 
-    // ==============================================================================
-    // 4. 관리자 페이지 UI (채팅 관제 화면)
-    // ==============================================================================
     public function admin_page_html() {
         ?>
         <div class="wrap" style="display:flex; gap:20px; height:80vh;">
@@ -255,12 +218,10 @@ class Gonggan_Chatbot_Git {
         <script>
             var currentPhone='', currentName='';
             
-            // 시간 포맷팅 함수 (관리자용: 월/일 포함)
             function getAdminTime(dateStr) {
                 if(!dateStr || dateStr === '0000-00-00 00:00:00') return '';
                 let t = dateStr.split(/[- :]/);
                 let date = new Date(t[0], t[1]-1, t[2], t[3], t[4], t[5]);
-                
                 let mon = date.getMonth() + 1;
                 let day = date.getDate();
                 let h = date.getHours();
@@ -268,11 +229,9 @@ class Gonggan_Chatbot_Git {
                 let ampm = h >= 12 ? '오후' : '오전';
                 h = h % 12; h = h ? h : 12;
                 m = m < 10 ? '0'+m : m;
-                
                 return `${mon}/${day} ${ampm} ${h}:${m}`;
             }
 
-            // 사용자 목록 로드
             function loadUserList() {
                 jQuery.post(ajaxurl, {action: 'gnbot_admin_list'}, function(res) {
                     if(res.success) {
@@ -285,14 +244,12 @@ class Gonggan_Chatbot_Git {
                     }
                 });
             }
-            // 사용자 선택 시 대화내역 로드
             function selectUser(phone, name) {
                 currentPhone = phone; currentName = name;
                 document.getElementById('gn-chat-title').innerText = name + ' (' + phone + ')';
                 document.getElementById('btn-reset-ai').style.display = 'block'; 
                 loadChatHistory();
             }
-            // 대화 내역 그리기 (말풍선 + 시간)
             function loadChatHistory() {
                 if(!currentPhone) return;
                 jQuery.post(ajaxurl, {action: 'gnbot_get_history', phone: currentPhone}, function(res) {
@@ -300,7 +257,7 @@ class Gonggan_Chatbot_Git {
                         var box = document.getElementById('gn-admin-chat-box');
                         box.innerHTML = '';
                         res.data.forEach(function(msg) {
-                            var isMe = (msg.sender === '관리자'); // 내가 보낸 것
+                            var isMe = (msg.sender === '관리자'); 
                             
                             if(msg.sender === '시스템') {
                                 box.innerHTML += `<div style="text-align:center; margin:10px; color:#999; font-size:12px;">- ${msg.msg} -</div>`;
@@ -313,7 +270,7 @@ class Gonggan_Chatbot_Git {
                                 ? "background:#e6f7ff; border:1px solid #91d5ff; color:#0050b3; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"
                                 : (msg.sender === 'AI' 
                                     ? "background:#fff; border:1px solid #ddd; color:#333; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"
-                                    : "background:#222; color:#fff; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;");
+                                    : "background:#222; color:#fff; border-radius:10px; padding:8px 12px; max-width:70%; text-align:left;"); 
 
                             var timeHtml = `<span style="font-size:10px; color:#999; margin:0 5px; padding-bottom:2px; white-space:nowrap;">${getAdminTime(msg.created_at)}</span>`;
                             var bubbleHtml = `<div style="${bubbleStyle}">${msg.msg.replace(/\n/g, '<br>')}</div>`;
@@ -332,7 +289,6 @@ class Gonggan_Chatbot_Git {
                     }
                 });
             }
-            // 관리자 메시지 전송
             function sendAdminMsg() {
                 var txt = document.getElementById('gn-admin-input').value;
                 if(!txt || !currentPhone) return;
@@ -341,7 +297,6 @@ class Gonggan_Chatbot_Git {
                     loadChatHistory();
                 });
             }
-            // AI 다시 켜기
             function resetAI() {
                 if(!currentPhone) return;
                 if(!confirm('다시 AI가 답변하도록 설정하시겠습니까?')) return;
@@ -356,20 +311,39 @@ class Gonggan_Chatbot_Git {
         <?php
     }
 
-    // ==============================================================================
-    // 5. 사용자 페이지 숏코드 [gn_chatbot_page] (HTML 구조만 포함)
-    // ==============================================================================
     public function render_shortcode() {
         ob_start(); 
         ?>
+        <script>
+            function checkPrivacyAndStart() {
+                var chk = document.getElementById('gn-privacy-agree');
+                if(!chk.checked) {
+                    alert('개인정보 수집 및 이용에 동의해주셔야 상담이 가능합니다.');
+                    return;
+                }
+                // 체크되었으면 원래 script.js에 있는 startChat() 함수 실행
+                startChat(); 
+            }
+        </script>
+
         <div class="gn-phone-container">
             <div id="gn-login">
                 <div class="gn-title">👋 입주 문의</div>
                 <div class="gn-desc">공간나인 AI 매니저입니다.<br>연락처를 남겨주시면 바로 연결됩니다.</div>
+                
                 <input type="text" id="uName" class="gn-input" placeholder="예: 홍길동">
                 <input type="text" id="uPhone" class="gn-input" placeholder="예: 010-1234-5678">
-                <button class="gn-btn-primary" onclick="startChat()">상담 시작하기</button>
+
+                <div style="margin: 15px 0 5px 0; text-align: left;">
+                    <label style="font-size: 13px; color: #555; display: flex; align-items: center; cursor: pointer;">
+                        <input type="checkbox" id="gn-privacy-agree" style="width:auto; margin-right: 8px;">
+                        <span>[필수] 개인정보 수집 및 이용 동의</span>
+                    </label>
+                </div>
+
+                <button class="gn-btn-primary" onclick="checkPrivacyAndStart()">상담 시작하기</button>
             </div>
+
             <div id="gn-chat">
                 <div class="gn-head">
                     <span>🏡 공간나인 매니저</span>
