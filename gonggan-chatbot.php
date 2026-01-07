@@ -1,8 +1,8 @@
 <?php
 /**
- * Plugin Name: 공간나인 AI 매니저 (Logic Master v8.9)
- * Description: "번방" 등 한글이 붙은 2인실(1-1번방) 인식 오류 수정 및 로직 강화
- * Version: 8.9
+ * Plugin Name: 공간나인 AI 매니저 (Logic Master v9.2)
+ * Description: 대화 문맥(Context) 기억 기능 탑재 + 한글 인식 강화 (신당점 환각/위치 질문 오류 해결)
+ * Version: 9.2
  * Author: GongganNine
  */
 
@@ -27,7 +27,6 @@ class Gonggan_Chatbot_Git {
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
         add_action('admin_menu', [$this, 'add_admin_menu']);
         
-        // AJAX Actions
         add_action('wp_ajax_gnbot_chat_submit', [$this, 'ajax_chat_submit']);
         add_action('wp_ajax_nopriv_gnbot_chat_submit', [$this, 'ajax_chat_submit']);
         add_action('wp_ajax_gnbot_get_history', [$this, 'ajax_get_history']);
@@ -77,16 +76,48 @@ class Gonggan_Chatbot_Git {
         $wpdb->insert($this->table_name, ['phone' => $phone, 'name' => $name, 'message' => $msg, 'sender' => $sender, 'created_at' => current_time('mysql')]);
     }
 
-    // [기능 1] 지점 모호성 해결
+    // ==============================================================================
+    // ★ [핵심 기능] 최근 대화 기록 가져오기 (Context Memory)
+    // ==============================================================================
+    private function get_recent_conversation($phone, $limit = 6) {
+        global $wpdb;
+        // 최근 6개 메시지를 가져옴 (현재 메시지 포함될 수 있음)
+        $results = $wpdb->get_results($wpdb->prepare(
+            "SELECT sender, message FROM $this->table_name WHERE phone = %s ORDER BY id DESC LIMIT %d", 
+            $phone, $limit
+        ), ARRAY_A);
+        
+        $history = [];
+        if ($results) {
+            // DB는 최신순(DESC)이므로 대화 순서대로(ASC) 뒤집기
+            $results = array_reverse($results);
+            foreach ($results as $row) {
+                // sender를 OpenAI role로 변환
+                $role = ($row['sender'] === '고객') ? 'user' : 'assistant';
+                if ($row['sender'] === '시스템' || $row['sender'] === '관리자') continue; // 시스템 메시지는 제외
+                
+                $history[] = ['role' => $role, 'content' => $row['message']];
+            }
+        }
+        return $history;
+    }
+
+    // [기능] 지점 모호성 해결 (한글 인식 강화 mb_strpos 사용)
     private function check_branch_ambiguity($message) {
+        // 1. 위치/주소 질문이면 되묻기 패스 (AI가 FAQ 답변)
+        if (mb_strpos($message, '위치') !== false || mb_strpos($message, '주소') !== false || mb_strpos($message, '어디') !== false) {
+            return false;
+        }
+
+        // 2. 성수점 모호성 체크
         $msg = str_replace(' ', '', $message); 
-        if ((strpos($msg, '성수') !== false) && (strpos($msg, '1호') === false && strpos($msg, '2호') === false)) {
+        if ((mb_strpos($msg, '성수') !== false) && (mb_strpos($msg, '1호') === false && mb_strpos($msg, '2호') === false)) {
             return "성수점은 **성수 1호점**과 **성수 2호점**이 있습니다.\n어느 지점의 공실을 조회해 드릴까요?";
         }
         return false;
     }
 
-    // [기능 2] 노션 데이터 조회 및 정제 (수정됨: 2인실 인식 로직 개선)
+    // [기능] 노션 데이터 조회
     private function fetch_room_status_safe() {
         if (!defined('GNBOT_DATABASE_ID') || !GNBOT_DATABASE_ID) return "(DB설정안됨)";
 
@@ -120,12 +151,10 @@ class Gonggan_Chatbot_Git {
 
                 if (!$branch || !$raw_room_name) continue;
 
-                // 필터링: 거주중, 계약, 예약 상태 제외
                 if (strpos($status, '거주') !== false || strpos($status, '계약') !== false || strpos($status, '예약') !== false) {
                     continue; 
                 }
 
-                // 날짜 필터링
                 $dates = $p['properties']['계약기간']['rollup']['array'] ?? [];
                 if (empty($dates) && isset($p['properties']['계약기간']['date'])) {
                     $dates = [$p['properties']['계약기간']];
@@ -137,13 +166,8 @@ class Gonggan_Chatbot_Git {
                     }
                 }
 
-                // ★ [수정됨] 2인실 판단 로직 개선
-                // 기존: /-(\d+)$/ (끝이 숫자로 끝나야 함) -> 실패 원인 (뒤에 '번방'이 붙어서)
-                // 수정: /-(\d+)/  (중간에라도 -숫자 패턴이 있으면 2인실로 인정)
                 $display_name = $raw_room_name;
-                
                 if (preg_match('/-(\d+)/', $raw_room_name)) {
-                    // 예: "1-1번방" -> 매칭됨 -> 2인실로 표기
                     $display_name = "$raw_room_name (2인실)"; 
                 } else {
                     $display_name = "$raw_room_name (1인실)";
@@ -168,6 +192,7 @@ class Gonggan_Chatbot_Git {
         $name = sanitize_text_field($_POST['name'] ?? '');
         $phone = sanitize_text_field($_POST['phone'] ?? '');
 
+        // 1. 고객 메시지 저장
         $this->save_message($phone, $name, $msg, '고객');
 
         if (get_option('gnbot_mute_' . $phone)) {
@@ -175,6 +200,7 @@ class Gonggan_Chatbot_Git {
             return;
         }
 
+        // 2. 지점 되묻기 (위치 질문이 아닐 때만)
         $ambiguity_reply = $this->check_branch_ambiguity($msg);
         if ($ambiguity_reply) {
             $this->save_message($phone, $name, $ambiguity_reply, 'AI'); 
@@ -188,24 +214,33 @@ class Gonggan_Chatbot_Git {
         $system_prompt = "당신은 쉐어하우스 '공간나인'의 친절한 매니저입니다.\n" .
                          "고객명: $name, 오늘: $today\n\n" .
                          
-                         "[실시간 공실 현황]\n" .
+                         "[실시간 공실 현황 (아래 방만 입주 가능)]\n" .
                          "$room_info_text\n\n" .
 
+                         "[공간나인 운영 정책 (FAQ)]\n" .
+                         "1. 입주 비용: 월세는 방마다 상이하며, **관리비는 월 10만원 별도**입니다. **보증금은 200만원**입니다.\n" .
+                         "2. 입주 조건: **여성 전용** 쉐어하우스이며, **성인**만 입주 가능합니다.\n" .
+                         "3. 계약 기간: **최소 3개월에서 6개월**부터 가능합니다.\n" .
+                         "4. 위치 정보: **모든 지점의 정확한 위치는 홈페이지의 지점 상세 정보를 참고해주세요.** (성수 1호점, 2호점은 같은 건물입니다.)\n" .
+                         "5. 방 크기/구조: 방마다 상이하므로, 구체적인 문의는 담당자에게 문의 바랍니다.\n" .
+                         "6. 생활 규칙: 특별한 제재는 없으나, 기본적인 청소와 배려 수칙을 지켜주세요.\n\n" .
+
                          "[답변 지침]\n" .
-                         "1. 위 목록에 있는 방은 모두 '즉시 입주 가능'한 상태입니다.\n" .
-                         "2. 고객이 특정 지점을 물어보면 해당 지점의 공실만 안내하세요.\n" .
-                         "3. 방 이름 뒤에 '(2인실)'이라고 적혀있으면, 반드시 '참고로 이 방은 2인실입니다'라고 언급해주세요.\n" .
-                         "4. 만약 목록에 없는 지점을 묻거나 공실이 없다면 대기 예약을 안내하세요.\n" .
-                         "5. 답변은 명확하고 친절하게 해주세요.";
+                         "- 반드시 **이전 대화 흐름(Context)**을 파악하고 답변하세요. (예: 고객이 앞에서 '성수점'을 물었다면 '1호점'은 '성수 1호점'을 의미함)\n" .
+                         "- 공실 목록에 있는 방은 '즉시 입주 가능'합니다.\n" .
+                         "- 답변은 간결하고 핵심 위주로 작성하세요.";
+
+        // ★ 3. 대화 기록 가져오기 (Memory Injection)
+        // 시스템 프롬프트를 맨 앞에, 그 뒤에 최근 대화 6턴을 붙임
+        $messages_payload = [['role' => 'system', 'content' => $system_prompt]];
+        $recent_history = $this->get_recent_conversation($phone, 6); 
+        $messages_payload = array_merge($messages_payload, $recent_history);
 
         $res = wp_remote_post('https://api.openai.com/v1/chat/completions', [
             'headers' => ['Authorization' => 'Bearer ' . GNBOT_OPENAI_KEY, 'Content-Type' => 'application/json'],
             'body' => json_encode([
                 'model' => 'gpt-4o-mini', 
-                'messages' => [
-                    ['role' => 'system', 'content' => $system_prompt],
-                    ['role' => 'user', 'content' => $msg]
-                ]
+                'messages' => $messages_payload 
             ]),
             'timeout' => 20
         ]);
@@ -222,7 +257,7 @@ class Gonggan_Chatbot_Git {
         }
     }
     
-    // (이하 Admin 관련 함수 동일)
+    // (이하 Admin 함수 동일)
     public function ajax_get_history() {
         global $wpdb;
         $phone = sanitize_text_field($_POST['phone'] ?? '');
