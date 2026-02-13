@@ -1,14 +1,13 @@
 <?php
 /**
- * Plugin Name: 공간나인 AI 매니저 (Logic Master v9.2)
- * Description: 대화 문맥(Context) 기억 기능 탑재 + 한글 인식 강화 (신당점 환각/위치 질문 오류 해결)
- * Version: 9.2
+ * Plugin Name: 공간나인 AI 매니저 (Logic Master v10.1)
+ * Description: 프롬프트 파일 분리(.txt) + 방 번호별 정밀 가격표(.json) 연동 시스템
+ * Version: 10.1
  * Author: GongganNine
  */
 
 if (!defined('ABSPATH')) exit;
 
-// 설정 파일 로드
 $config_file = plugin_dir_path(__FILE__) . 'gnbot-config.php';
 if (file_exists($config_file)) {
     require_once $config_file;
@@ -17,10 +16,17 @@ if (file_exists($config_file)) {
 class Gonggan_Chatbot_Git {
 
     private $table_name;
+    private $json_data_file;
+    private $prompt_file;
 
     public function __construct() {
         global $wpdb;
-        $this->table_name = $wpdb->prefix . 'gn_chat_logs'; 
+        $this->table_name = $wpdb->prefix . 'gn_chat_logs';
+        
+        // 파일 경로 설정
+        $this->json_data_file = plugin_dir_path(__FILE__) . 'gnbot-data.json';
+        $this->prompt_file = plugin_dir_path(__FILE__) . 'gnbot-prompt.txt';
+        
         date_default_timezone_set('Asia/Seoul');
 
         register_activation_hook(__FILE__, [$this, 'create_table']); 
@@ -76,12 +82,55 @@ class Gonggan_Chatbot_Git {
         $wpdb->insert($this->table_name, ['phone' => $phone, 'name' => $name, 'message' => $msg, 'sender' => $sender, 'created_at' => current_time('mysql')]);
     }
 
-    // ==============================================================================
-    // ★ [핵심 기능] 최근 대화 기록 가져오기 (Context Memory)
-    // ==============================================================================
+    // [기능 1] JSON 데이터 로드 (방별 가격표 파싱)
+    private function get_sharehouse_knowledge() {
+        if (!file_exists($this->json_data_file)) return "(지점 정보 파일 없음)";
+
+        $json_str = file_get_contents($this->json_data_file);
+        $data = json_decode($json_str, true);
+        if (!$data) return "(데이터 형식 오류)";
+
+        $text = "";
+        
+        // 1. 공통 정책
+        $policy = $data['common_policy'] ?? [];
+        $contact = $data['contact_info'] ?? [];
+        $text .= "[기본 정책 및 연락처]\n";
+        $text .= "- 담당자: {$contact['manager_phone']}\n";
+        $text .= "- 보증금: " . ($policy['deposit'] ?? '-') . "\n";
+        $text .= "- 관리비: " . ($policy['management_fee'] ?? '-') . "\n";
+        $text .= "- 조건: " . ($policy['gender_limit'] ?? '') . ", " . ($policy['contract_period'] ?? '') . "\n\n";
+
+        // 2. 지점별 방 가격 리스트
+        $text .= "[지점별 상세 가격표 (월세)]\n";
+        if (!empty($data['branches'])) {
+            foreach ($data['branches'] as $br) {
+                $text .= "## {$br['name']}\n";
+                $text .= "  - 위치: {$br['address']}\n";
+                $text .= "  - 시설: " . implode(', ', $br['facilities'] ?? []) . "\n";
+                
+                if (!empty($br['room_prices'])) {
+                    foreach ($br['room_prices'] as $room => $price) {
+                        $text .= "  - $room : $price\n";
+                    }
+                }
+                $text .= "\n";
+            }
+        }
+        return $text;
+    }
+
+    // [기능 2] 프롬프트 파일 로드
+    private function get_system_prompt_content() {
+        if (!file_exists($this->prompt_file)) {
+            return "당신은 공간나인 매니저입니다. 친절하게 답변하세요."; // 파일 없을 때 기본값
+        }
+        return file_get_contents($this->prompt_file);
+    }
+
+    // [기능 3] 최근 대화 기록
     private function get_recent_conversation($phone, $limit = 6) {
         global $wpdb;
-        // 최근 6개 메시지를 가져옴 (현재 메시지 포함될 수 있음)
         $results = $wpdb->get_results($wpdb->prepare(
             "SELECT sender, message FROM $this->table_name WHERE phone = %s ORDER BY id DESC LIMIT %d", 
             $phone, $limit
@@ -89,27 +138,19 @@ class Gonggan_Chatbot_Git {
         
         $history = [];
         if ($results) {
-            // DB는 최신순(DESC)이므로 대화 순서대로(ASC) 뒤집기
             $results = array_reverse($results);
             foreach ($results as $row) {
-                // sender를 OpenAI role로 변환
                 $role = ($row['sender'] === '고객') ? 'user' : 'assistant';
-                if ($row['sender'] === '시스템' || $row['sender'] === '관리자') continue; // 시스템 메시지는 제외
-                
+                if ($row['sender'] === '시스템' || $row['sender'] === '관리자') continue;
                 $history[] = ['role' => $role, 'content' => $row['message']];
             }
         }
         return $history;
     }
 
-    // [기능] 지점 모호성 해결 (한글 인식 강화 mb_strpos 사용)
+    // [기능 4] 지점 모호성 해결
     private function check_branch_ambiguity($message) {
-        // 1. 위치/주소 질문이면 되묻기 패스 (AI가 FAQ 답변)
-        if (mb_strpos($message, '위치') !== false || mb_strpos($message, '주소') !== false || mb_strpos($message, '어디') !== false) {
-            return false;
-        }
-
-        // 2. 성수점 모호성 체크
+        if (mb_strpos($message, '위치') !== false || mb_strpos($message, '주소') !== false || mb_strpos($message, '어디') !== false) return false;
         $msg = str_replace(' ', '', $message); 
         if ((mb_strpos($msg, '성수') !== false) && (mb_strpos($msg, '1호') === false && mb_strpos($msg, '2호') === false)) {
             return "성수점은 **성수 1호점**과 **성수 2호점**이 있습니다.\n어느 지점의 공실을 조회해 드릴까요?";
@@ -117,7 +158,7 @@ class Gonggan_Chatbot_Git {
         return false;
     }
 
-    // [기능] 노션 데이터 조회
+    // [기능 5] 노션 공실 데이터 조회
     private function fetch_room_status_safe() {
         if (!defined('GNBOT_DATABASE_ID') || !GNBOT_DATABASE_ID) return "(DB설정안됨)";
 
@@ -128,9 +169,7 @@ class Gonggan_Chatbot_Git {
         ];
         
         $res = wp_remote_request($url, $args);
-        if (is_wp_error($res) || wp_remote_retrieve_response_code($res) != 200) {
-            return "(노션 연결 실패 - 관리자 확인 필요)"; 
-        }
+        if (is_wp_error($res) || wp_remote_retrieve_response_code($res) != 200) return "(노션 연결 실패)"; 
 
         $body = wp_remote_retrieve_body($res);
         $data = json_decode($body, true);
@@ -143,45 +182,27 @@ class Gonggan_Chatbot_Git {
                 $raw_room_name = $p['properties']['방번호']['title'][0]['plain_text'] ?? '';
                 
                 $status = '-';
-                if (isset($p['properties']['입주현황']['select']['name'])) {
-                    $status = $p['properties']['입주현황']['select']['name'];
-                } elseif (isset($p['properties']['입주현황']['rollup']['array'][0]['select']['name'])) {
-                    $status = $p['properties']['입주현황']['rollup']['array'][0]['select']['name'];
-                }
+                if (isset($p['properties']['입주현황']['select']['name'])) $status = $p['properties']['입주현황']['select']['name'];
+                elseif (isset($p['properties']['입주현황']['rollup']['array'][0]['select']['name'])) $status = $p['properties']['입주현황']['rollup']['array'][0]['select']['name'];
 
                 if (!$branch || !$raw_room_name) continue;
-
-                if (strpos($status, '거주') !== false || strpos($status, '계약') !== false || strpos($status, '예약') !== false) {
-                    continue; 
-                }
+                if (strpos($status, '거주') !== false || strpos($status, '계약') !== false || strpos($status, '예약') !== false) continue;
 
                 $dates = $p['properties']['계약기간']['rollup']['array'] ?? [];
-                if (empty($dates) && isset($p['properties']['계약기간']['date'])) {
-                    $dates = [$p['properties']['계약기간']];
-                }
+                if (empty($dates) && isset($p['properties']['계약기간']['date'])) $dates = [$p['properties']['계약기간']];
                 foreach ($dates as $d) {
                     $end_date = $d['date']['end'] ?? $d['date']['start'] ?? null;
-                    if ($end_date && $end_date >= $today) {
-                        continue 2; 
-                    }
+                    if ($end_date && $end_date >= $today) continue 2; 
                 }
 
                 $display_name = $raw_room_name;
-                if (preg_match('/-(\d+)/', $raw_room_name)) {
-                    $display_name = "$raw_room_name (2인실)"; 
-                } else {
-                    $display_name = "$raw_room_name (1인실)";
-                }
+                if (preg_match('/-(\d+)/', $raw_room_name)) $display_name = "$raw_room_name (2인실)"; 
+                else $display_name = "$raw_room_name (1인실)";
 
                 $final_lines[] = "- [$branch] **$display_name** : 즉시 입주 가능";
             }
         }
-
-        if (empty($final_lines)) {
-            return "현재 즉시 입주 가능한 공실이 없습니다.";
-        }
-
-        return implode("\n", $final_lines);
+        return empty($final_lines) ? "현재 즉시 입주 가능한 공실이 없습니다." : implode("\n", $final_lines);
     }
 
     public function ajax_chat_submit() {
@@ -192,7 +213,6 @@ class Gonggan_Chatbot_Git {
         $name = sanitize_text_field($_POST['name'] ?? '');
         $phone = sanitize_text_field($_POST['phone'] ?? '');
 
-        // 1. 고객 메시지 저장
         $this->save_message($phone, $name, $msg, '고객');
 
         if (get_option('gnbot_mute_' . $phone)) {
@@ -200,7 +220,6 @@ class Gonggan_Chatbot_Git {
             return;
         }
 
-        // 2. 지점 되묻기 (위치 질문이 아닐 때만)
         $ambiguity_reply = $this->check_branch_ambiguity($msg);
         if ($ambiguity_reply) {
             $this->save_message($phone, $name, $ambiguity_reply, 'AI'); 
@@ -209,30 +228,23 @@ class Gonggan_Chatbot_Git {
         }
         
         $room_info_text = $this->fetch_room_status_safe();
+        $static_knowledge = $this->get_sharehouse_knowledge(); // JSON 데이터
+        $prompt_base = $this->get_system_prompt_content();     // 텍스트 파일 프롬프트
         $today = date("Y-m-d");
 
-        $system_prompt = "당신은 쉐어하우스 '공간나인'의 친절한 매니저입니다.\n" .
-                         "고객명: $name, 오늘: $today\n\n" .
-                         
-                         "[실시간 공실 현황 (아래 방만 입주 가능)]\n" .
-                         "$room_info_text\n\n" .
+        // ★ [최종 조립] 프롬프트 + 데이터
+        $final_system_message = $prompt_base . "\n\n" .
+                                "--- [현재 컨텍스트 정보] ---\n" .
+                                "고객명: $name\n" .
+                                "오늘 날짜: $today\n\n" .
+                                
+                                "--- [실시간 공실 데이터 (Notion)] ---\n" .
+                                "$room_info_text\n\n" .
+                                
+                                "--- [지점/가격/시설 정보 (JSON)] ---\n" .
+                                "$static_knowledge";
 
-                         "[공간나인 운영 정책 (FAQ)]\n" .
-                         "1. 입주 비용: 월세는 방마다 상이하며, **관리비는 월 10만원 별도**입니다. **보증금은 200만원**입니다.\n" .
-                         "2. 입주 조건: **여성 전용** 쉐어하우스이며, **성인**만 입주 가능합니다.\n" .
-                         "3. 계약 기간: **최소 3개월에서 6개월**부터 가능합니다.\n" .
-                         "4. 위치 정보: **모든 지점의 정확한 위치는 홈페이지의 지점 상세 정보를 참고해주세요.** (성수 1호점, 2호점은 같은 건물입니다.)\n" .
-                         "5. 방 크기/구조: 방마다 상이하므로, 구체적인 문의는 담당자에게 문의 바랍니다.\n" .
-                         "6. 생활 규칙: 특별한 제재는 없으나, 기본적인 청소와 배려 수칙을 지켜주세요.\n\n" .
-
-                         "[답변 지침]\n" .
-                         "- 반드시 **이전 대화 흐름(Context)**을 파악하고 답변하세요. (예: 고객이 앞에서 '성수점'을 물었다면 '1호점'은 '성수 1호점'을 의미함)\n" .
-                         "- 공실 목록에 있는 방은 '즉시 입주 가능'합니다.\n" .
-                         "- 답변은 간결하고 핵심 위주로 작성하세요.";
-
-        // ★ 3. 대화 기록 가져오기 (Memory Injection)
-        // 시스템 프롬프트를 맨 앞에, 그 뒤에 최근 대화 6턴을 붙임
-        $messages_payload = [['role' => 'system', 'content' => $system_prompt]];
+        $messages_payload = [['role' => 'system', 'content' => $final_system_message]];
         $recent_history = $this->get_recent_conversation($phone, 6); 
         $messages_payload = array_merge($messages_payload, $recent_history);
 
@@ -257,38 +269,33 @@ class Gonggan_Chatbot_Git {
         }
     }
     
-    // (이하 Admin 함수 동일)
+    // (이하 Admin 함수 유지)
     public function ajax_get_history() {
         global $wpdb;
         $phone = sanitize_text_field($_POST['phone'] ?? '');
         $results = $wpdb->get_results($wpdb->prepare("SELECT message as msg, sender, created_at FROM $this->table_name WHERE phone = %s ORDER BY created_at ASC", $phone), ARRAY_A);
         wp_send_json_success($results);
     }
-    
     public function ajax_admin_list() {
         global $wpdb;
         $results = $wpdb->get_results("SELECT DISTINCT phone, name FROM $this->table_name ORDER BY created_at DESC LIMIT 50", ARRAY_A);
         wp_send_json_success($results);
     }
-
     public function ajax_send_admin() {
         $phone = sanitize_text_field($_POST['phone']);
         $this->save_message($phone, $_POST['name'], $_POST['message'], '관리자');
         update_option('gnbot_mute_' . $phone, true);
         wp_send_json_success();
     }
-
     public function ajax_reset_ai() {
         $phone = sanitize_text_field($_POST['phone']);
         delete_option('gnbot_mute_' . $phone);
         $this->save_message($phone, '시스템', 'AI 상담이 다시 활성화되었습니다.', '시스템');
         wp_send_json_success();
     }
-
     public function add_admin_menu() {
         add_menu_page('AI 상담', 'AI 상담', 'manage_options', 'gnbot-admin', [$this, 'admin_page_html'], 'dashicons-groups', 6);
     }
-
     public function admin_page_html() {
         ?>
         <div class="wrap" style="display:flex; gap:20px; height:80vh;">
